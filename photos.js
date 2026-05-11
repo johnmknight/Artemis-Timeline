@@ -10647,6 +10647,25 @@ const PHOTO_DATA = {
       "era": "mission",
       "curator": "hankmt",
       "center": ""
+    },
+    {
+      "time": "2025-07-15 12:00:00",
+      "file": "jsc2025e064769.jpg",
+      "photographer": "NASA/James Blair",
+      "location": "Johnson Space Center",
+      "camera": "",
+      "settings": "",
+      "spacecraft": false,
+      "batch": 0,
+      "title": "Christina Koch and the Inflatable Moon - Lunar Observations Training",
+      "flickr_desc": "jsc2025e064769 --- An inflatable Moon is hoisted above the Orion mockup at NASA's Johnson Space Center in Houston. The Moon was used for crew lunar observation training ahead of the Artemis II mission.",
+      "enabled": true,
+      "addedAt": "2026-05-11T00:59:29-04:00",
+      "source": "nasa_library",
+      "source_id": "jsc2025e064769",
+      "era": "pre-flight-training",
+      "curator": "johnmknight",
+      "center": "JSC"
     }
   ],
   "audio": [
