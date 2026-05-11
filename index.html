@@ -1398,8 +1398,17 @@
 // --- CONFIGURATION ---
 
 // Base URL for media files (images in web/, audio in audio/).
-// Set to '' for local/relative paths, or a CDN like 'https://pub-xxxxx.r2.dev'
-const MEDIA_BASE = 'https://pub-6f67061aecce4413aa83975cba06595d.r2.dev/';
+//
+// On localhost we use relative paths so the local web/ + audio/ folders
+// are served by the static server (e.g. python -m http.server). On any
+// other host we use the production R2 CDN.
+//
+// This lets new photos promoted via the local acquisition pipeline appear
+// immediately in the viewer without needing to push to R2 first.
+const MEDIA_BASE =
+    (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:')
+        ? ''
+        : 'https://pub-6f67061aecce4413aa83975cba06595d.r2.dev/';
 
 // Unit toggle: miles (default) or metric (km/m)
 let useMetric = false;
