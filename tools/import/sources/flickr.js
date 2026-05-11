@@ -46,8 +46,13 @@ const EXTRAS = 'description,date_taken,owner_name,tags,url_l,url_s,url_o';
 
 // Per-source configurations. Each one produces candidates labeled with
 // its own source string and (when known) a baseline NASA center.
+//
+// NSIDs verified via flickr.urls.lookupUser. Don't trust the URL alias —
+// e.g. "nasa2explore" is the alias for NASA Johnson, NSID 29988733@N04,
+// and the URL alias "nasakennedy" maps to 108488366@N07.
 const DEFAULT_SOURCES = [
   // NASA Johnson's curated Artemis II album. Cleanest possible starting set.
+  // The photoset ID is globally unique so we don't need a user_id here.
   {
     key: 'artemis2',
     kind: 'photoset',
@@ -57,18 +62,88 @@ const DEFAULT_SOURCES = [
     note: 'NASA Johnson\'s curated Artemis II photoset',
   },
   // NASA HQ Photo's full photostream, narrowed by free-text search.
+  // Mix of launch press, walkout, splashdown, and HQ briefings.
   {
     key: 'nasahq',
     kind: 'user_search',
     source_label: 'flickr_nasahqphoto',
-    user_id: '35067687@N04',                 // NASA HQ Photo NSID
+    user_id: '35067687@N04',                 // NASA HQ Photo
     text: 'Artemis II',
     default_center: 'HQ',
     note: 'NASA HQ Photo photostream, text="Artemis II"',
   },
+  // NASA Kennedy photostream — launch operations, pad ops, integration.
+  // Primary source for KSC-side mission-week imagery.
+  {
+    key: 'kennedy',
+    kind: 'user_search',
+    source_label: 'flickr_nasakennedy',
+    user_id: '108488366@N07',                // NASAKennedy
+    text: 'Artemis II',
+    default_center: 'KSC',
+    note: 'NASA Kennedy photostream, text="Artemis II"',
+  },
+  // NASA Marshall photostream — SLS hardware, engine tests, core stage.
+  // Primary source for pre-flight-hardware imagery (the era bucket we have
+  // zero of in canon today).
+  {
+    key: 'marshall',
+    kind: 'user_search',
+    source_label: 'flickr_nasamarshall',
+    user_id: '28634332@N05',                 // NASA's Marshall Space Flight Center
+    text: 'Artemis II',
+    default_center: 'MSFC',
+    note: 'NASA Marshall photostream, text="Artemis II"',
+  },
 ];
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Word-boundary regex for Artemis II: matches "Artemis II", "Artemis II.",
+// "Artemis II crew", etc. — does NOT match "Artemis III" or "Artemis IIII"
+// because there's no word boundary between consecutive 'I' characters.
+//
+// Flickr's `text` search parameter does substring matching, so a query for
+// "Artemis II" returns hits where the literal substring appears anywhere in
+// title / description / tags — including within "Artemis III". This regex
+// catches the false positives at the adapter level so the orchestrator
+// downstream never sees them.
+const ARTEMIS_II_RE = /\bArtemis\s+II\b/i;
+
+// Other Artemis missions whose presence in the *title* disqualifies a
+// candidate regardless of whether the description happens to mention
+// Artemis II in passing. Titles are authoritative: the post creator is
+// telling you what the post is about.
+const OTHER_ARTEMIS_TITLE_RE = /\bArtemis\s+(I|III|IV|V|VI|VII|VIII|IX|X|3|4|5)\b/i;
+
+/**
+ * Return true if the candidate has at least one strong "Artemis II"
+ * signal AND its title doesn't explicitly call out a different Artemis
+ * mission. Used to reject content that slipped through Flickr's
+ * substring-based search.
+ */
+function mentionsArtemisII(candidate) {
+  // First: if the title explicitly says "Artemis III" / "Artemis I" / etc.,
+  // reject regardless of any Artemis II mention in the description.
+  if (OTHER_ARTEMIS_TITLE_RE.test(candidate.title || '')) {
+    // BUT — if the title also explicitly says Artemis II (e.g. "Artemis II
+    // and Artemis III comparison"), keep the post and let the reviewer
+    // decide.
+    if (!ARTEMIS_II_RE.test(candidate.title || '')) return false;
+  }
+
+  // Otherwise: any Artemis II signal in title, description, or tags wins.
+  if (ARTEMIS_II_RE.test(candidate.title || '')) return true;
+  if (ARTEMIS_II_RE.test(candidate.description || '')) return true;
+  if (Array.isArray(candidate.tags)) {
+    for (const t of candidate.tags) {
+      if (ARTEMIS_II_RE.test(t)) return true;
+      // Flickr machine-tag conventions: "artemis2" / "artemisii".
+      if (/^artemis(2|ii)$/i.test(t)) return true;
+    }
+  }
+  return false;
+}
 
 // -------------------------------------------------------------------------
 // API wrappers
@@ -225,6 +300,7 @@ async function discover(opts = {}) {
     let consecutiveSeen = 0;
     let stoppedEarly = false;
     let reachedLimit = false;
+    let falsePositivesFiltered = 0;
 
     while (candidates.length < limit) {
       let result;
@@ -246,6 +322,14 @@ async function discover(opts = {}) {
       for (const photo of result.photos) {
         const cand = normalizeItem(photo, src);
         if (!cand.source_id) continue;
+
+        // For text-search sources, reject anything that slipped through
+        // Flickr's substring match without actually being Artemis II.
+        // Album/photoset sources are curated upstream, so we trust them.
+        if (src.kind === 'user_search' && !mentionsArtemisII(cand)) {
+          falsePositivesFiltered++;
+          continue;
+        }
 
         if (seenIds.has(cand.source_id)) {
           consecutiveSeen++;
@@ -276,6 +360,7 @@ async function discover(opts = {}) {
       total,
       pagesFetched,
       addedThisSource: candidates.length - accumulatedBeforeSource,
+      falsePositivesFiltered,
       stoppedEarly,
       reachedLimit,
     };
