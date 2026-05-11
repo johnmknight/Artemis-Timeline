@@ -1543,16 +1543,21 @@
 
 // Base URL for media files (images in web/, audio in audio/).
 //
-// On localhost we use relative paths so the local web/ + audio/ folders
-// are served by the static server (e.g. python -m http.server). On any
-// other host we use the production R2 CDN.
+// Logic, by hostname:
+//   - localhost / 127.0.0.1 / file:                   relative paths (local dev)
+//   - *.pages.dev (Cloudflare Pages deployments)      relative paths (this fork's media is committed)
+//   - any other host (e.g. artemistimeline.com)       Hank's R2 CDN
 //
-// This lets new photos promoted via the local acquisition pipeline appear
-// immediately in the viewer without needing to push to R2 first.
-const MEDIA_BASE =
-    (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:')
-        ? ''
-        : 'https://pub-6f67061aecce4413aa83975cba06595d.r2.dev/';
+// The fork hosts media in-repo and serves them straight from Pages, so
+// new pipeline-promoted photos appear immediately on every git push.
+// Hank's production stays unaffected.
+const MEDIA_BASE = (() => {
+  const h = location.hostname;
+  if (location.protocol === 'file:')             return '';
+  if (h === 'localhost' || h === '127.0.0.1')    return '';
+  if (h.endsWith('.pages.dev'))                  return '';
+  return 'https://pub-6f67061aecce4413aa83975cba06595d.r2.dev/';
+})();
 
 // Unit toggle: miles (default) or metric (km/m)
 let useMetric = false;
