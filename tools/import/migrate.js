@@ -2,7 +2,7 @@
 /**
  * One-time schema migration for photos.js.
  *
- * Adds five new fields to every photo entry that doesn't already have them:
+ * Adds six new fields to every photo entry that doesn't already have them:
  *
  *   addedAt   - ISO-8601 timestamp in EDT (single fixed value for the whole
  *               migration run, marking when this fork picked up the schema)
@@ -19,6 +19,10 @@
  *               with "johnmknight" (or whichever GitHub handle is doing the
  *               promotion). Separates editorial responsibility from source
  *               of origin.
+ *   center    - NASA center code (KSC/JSC/MSFC/SSC/MAF/HQ/etc.) derived from
+ *               the existing `location` field. Empty for in-flight, recovery,
+ *               and non-NASA locations (which is most of Hank's data — most
+ *               of his collection is taken in space or on the recovery ship).
  *
  * Idempotent per-field. Re-running adds only the fields each entry is still
  * missing; entries that already have everything are left alone. This means
@@ -54,6 +58,43 @@ function deriveSourceId(file) {
 }
 
 /**
+ * Derive a NASA center code from an entry's existing `location` field.
+ * Returns "" if no recognizable center can be inferred (which is correct
+ * for in-flight, recovery, and non-NASA locations).
+ */
+const LOCATION_TO_CENTER_EXACT = {
+  'Kennedy Space Center': 'KSC',
+  'Liftoff': 'KSC',                              // launch event happens at KSC
+  'Ellington Field, Houston': 'JSC',             // JSC's T-38 base
+  'Mission Control, Houston': 'JSC',
+  'Science Evaluation Room, Houston': 'JSC',
+  'Space Vehicle Mockup Facility, Houston, TX': 'JSC',
+};
+
+function deriveCenter(entry) {
+  const loc = entry.location;
+  if (!loc) return '';
+
+  // Exact match first
+  if (LOCATION_TO_CENTER_EXACT[loc]) return LOCATION_TO_CENTER_EXACT[loc];
+
+  // Fuzzy fallback for variants (e.g., "Marshall Space Flight Center, Huntsville, AL")
+  const lower = loc.toLowerCase();
+  if (lower.includes('kennedy'))   return 'KSC';
+  if (lower.includes('marshall'))  return 'MSFC';
+  if (lower.includes('stennis'))   return 'SSC';
+  if (lower.includes('michoud'))   return 'MAF';
+  if (lower.includes('johnson'))   return 'JSC';
+  if (lower.includes('houston'))   return 'JSC';   // most Houston refs are JSC-adjacent
+  if (lower.includes('goddard'))   return 'GSFC';
+  if (lower.includes('glenn'))     return 'GRC';
+  if (lower.includes('langley'))   return 'LARC';
+  if (lower.includes('headquart')) return 'HQ';
+
+  return '';
+}
+
+/**
  * The canonical schema defaults for upstream entries. Each entry in the
  * existing photos.js gets these fields added IF they're missing. Order
  * matters for the touched-fields report only.
@@ -64,6 +105,7 @@ const UPSTREAM_DEFAULTS = [
   ['source_id', (e) => deriveSourceId(e.file)],
   ['era',       () => 'mission'],
   ['curator',   () => 'hankmt'],
+  ['center',    (e) => deriveCenter(e)],
 ];
 
 /**
@@ -145,8 +187,19 @@ async function main() {
   console.log(`[migrate] wrote ${PHOTOS_JS}`);
 }
 
-main().catch(err => {
-  console.error('[migrate] FAILED:', err.message);
-  console.error(err.stack);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error('[migrate] FAILED:', err.message);
+    console.error(err.stack);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  // Exported for tests + ad-hoc inspection. Not part of any public API.
+  deriveCenter,
+  deriveSourceId,
+  migrateEntry,
+  UPSTREAM_DEFAULTS,
+  LOCATION_TO_CENTER_EXACT,
+};

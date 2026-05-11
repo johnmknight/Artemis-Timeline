@@ -118,9 +118,8 @@ function extractPhotographer(d) {
 }
 
 /**
- * Extract a location hint from a NASA Library data record. The Library's
- * `location` field is rarely populated; `center` (e.g. "KSC", "JSC") is
- * almost always present. Expand center codes to readable names.
+ * NASA center codes used by the Library API (and our internal schema).
+ * Exported so other modules (migrate, viewer) can use the same mapping.
  */
 const CENTER_NAMES = {
   HQ:   'NASA Headquarters',
@@ -136,11 +135,26 @@ const CENTER_NAMES = {
   MAF:  'Michoud Assembly Facility',
 };
 
+/**
+ * Extract a location hint from a NASA Library data record. The Library's
+ * `location` field is rarely populated; `center` is almost always present.
+ * Expand center codes to readable names.
+ */
 function extractLocation(d) {
   if (d.location) return String(d.location).trim();
   if (d.center && CENTER_NAMES[d.center]) return CENTER_NAMES[d.center];
   if (d.center) return d.center;
   return '';
+}
+
+/**
+ * Return the NASA center code (e.g. "KSC") for a data record, or "" if the
+ * record's center field is missing or unrecognized.
+ */
+function extractCenter(d) {
+  if (!d.center) return '';
+  const c = String(d.center).toUpperCase().trim();
+  return CENTER_NAMES[c] ? c : c;   // pass through unknown codes verbatim
 }
 
 /**
@@ -163,6 +177,7 @@ function normalizeItem(item) {
     description: description.trim(),
     photographer: extractPhotographer(d),
     location: extractLocation(d),
+    center: extractCenter(d),
     camera: '',
     settings: '',
     taken_at: nasaDateToEdt(d.date_created),
@@ -183,12 +198,17 @@ async function discover(opts = {}) {
   const fullRescan = !!opts.fullRescan;
   const limit = Math.max(1, opts.limit | 0) || 100;
   const queries = (opts.queries && opts.queries.length) ? opts.queries : DEFAULT_QUERIES;
+  const centers = (opts.centers && opts.centers.length)
+      ? new Set(opts.centers.map(c => String(c).toUpperCase()))
+      : null;
 
   const candidates = [];
   const debugInfo = {
     queries: queries.slice(),
+    centersFilter: centers ? Array.from(centers) : null,
     perQuery: {},
     totalHitsAcrossQueries: 0,
+    filteredOutByCenter: 0,
   };
 
   // Track how many candidates we'd accumulated before each query started, so
@@ -234,6 +254,13 @@ async function discover(opts = {}) {
           }
           continue;
         }
+        // Center filter: skip records whose center isn't in the allowed set.
+        // Records with no center field are filtered out when a centers
+        // restriction is in effect.
+        if (centers && !centers.has(cand.center)) {
+          debugInfo.filteredOutByCenter++;
+          continue;
+        }
         consecutiveSeen = 0;
         candidates.push(cand);
         seenIds.add(cand.source_id);            // dedup within this run too
@@ -262,11 +289,12 @@ async function discover(opts = {}) {
 // -------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const args = { limit: 5, query: null, fullRescan: false, json: false };
+  const args = { limit: 5, query: null, fullRescan: false, json: false, centers: null };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--limit')        args.limit = parseInt(argv[++i], 10) || 5;
     else if (a === '--query')   args.query = argv[++i];
+    else if (a === '--centers') args.centers = argv[++i].split(/[,\s]+/).filter(Boolean);
     else if (a === '--full-rescan') args.fullRescan = true;
     else if (a === '--json')    args.json = true;
     else if (a === '-h' || a === '--help') args.help = true;
@@ -280,6 +308,9 @@ function printHelp() {
 Options:
   --limit N          Max candidates to return (default 5)
   --query "STR"      Override default query set with a single query
+  --centers LIST     Restrict to a comma-separated list of NASA center codes
+                     (e.g. --centers KSC,JSC,MSFC). Records with no recognized
+                     center are filtered out when this flag is used.
   --full-rescan      Don't stop at consecutive-seen heuristic
   --json             Output raw JSON (instead of human-readable summary)
   -h, --help         Show this help
@@ -296,9 +327,10 @@ async function standalone() {
     limit: args.limit,
     fullRescan: args.fullRescan,
     queries: args.query ? [args.query] : undefined,
+    centers: args.centers || undefined,
   };
 
-  console.error(`[nasa_library] discovering (limit=${args.limit}, fullRescan=${args.fullRescan}, queries=${(opts.queries || DEFAULT_QUERIES).join(' | ')})...`);
+  console.error(`[nasa_library] discovering (limit=${args.limit}, fullRescan=${args.fullRescan}, centers=${(args.centers || []).join(',') || 'any'}, queries=${(opts.queries || DEFAULT_QUERIES).join(' | ')})...`);
   const result = await discover(opts);
 
   if (args.json) {
@@ -313,6 +345,7 @@ async function standalone() {
     console.log(`  ID:       ${c.source_id}`);
     console.log(`  Title:    ${c.title}`);
     console.log(`  Taken:    ${c.taken_at || '(unknown)'}`);
+    console.log(`  Center:   ${c.center || '(none)'}`);
     console.log(`  By:       ${c.photographer}`);
     console.log(`  At:       ${c.location || '(unspecified)'}`);
     console.log(`  Tags:     ${c.tags.slice(0, 5).join(', ')}${c.tags.length > 5 ? '...' : ''}`);
@@ -334,4 +367,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { NAME, SOURCE_DEFAULT_ERA, discover };
+module.exports = { NAME, SOURCE_DEFAULT_ERA, CENTER_NAMES, discover };

@@ -24,7 +24,12 @@
  * @property {string}   title            - human-readable title
  * @property {string}   description      - longer-form description
  * @property {string}   photographer     - photographer credit; "NASA" or "" if unknown
- * @property {string}   location         - facility / city; "" if unknown
+ * @property {string}   location         - free-text facility / city; "" if unknown
+ * @property {string}   center           - NASA center code if applicable:
+ *                                          KSC / JSC / MSFC / SSC / MAF / HQ /
+ *                                          GSFC / GRC / LARC / AFRC / ARC.
+ *                                          Empty string for in-flight, recovery,
+ *                                          or non-NASA locations.
  * @property {string}   camera           - camera model (typically "" for non-EXIF sources)
  * @property {string}   settings         - exposure settings (typically "" for non-EXIF sources)
  * @property {string}   taken_at         - "YYYY-MM-DD HH:MM:SS" in EDT, best-available
