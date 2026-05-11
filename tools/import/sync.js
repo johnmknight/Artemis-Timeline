@@ -41,6 +41,7 @@ const { normalizeCandidate } = require('./normalize');
 const { classify } = require('./classify');
 
 const nasaLibrary = require('./sources/nasa-library');
+const flickr      = require('./sources/flickr');
 
 const REPO_ROOT  = path.resolve(__dirname, '..', '..');
 const PHOTOS_JS  = path.join(REPO_ROOT, 'photos.js');
@@ -48,7 +49,9 @@ const STATE_JSON = path.join(__dirname, 'state.json');
 const INBOX_JSON = path.join(__dirname, 'inbox.json');
 const LOG_DIR    = path.join(__dirname, 'log');
 
-const ADAPTERS = [nasaLibrary];
+// Adapters run in declaration order. seenIds is shared across them so a
+// later adapter doesn't re-emit what an earlier one already added this run.
+const ADAPTERS = [nasaLibrary, flickr];
 const DEFAULT_LIMIT = 50;
 
 // ---------------------------------------------------------------------------
