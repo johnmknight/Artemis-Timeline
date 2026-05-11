@@ -72,25 +72,47 @@ async function searchPage(query, page) {
 }
 
 /**
- * Find the best-resolution image URL among the alternates in links[].
- * Preference order: canonical (orig) > large > medium > preview > thumb.
+ * Categorize a link by its size suffix in the URL. NASA Image Library
+ * URLs end with one of ~thumb / ~small / ~medium / ~large / ~orig before
+ * the extension. We use these to pick the right size for each purpose:
+ *
+ *   - Full-quality download: prefer ~large (typically 1242x1920, ~180KB —
+ *     fine for the timeline viewer; saves us a heavy ~orig download + an
+ *     ImageMagick resize round-trip).
+ *   - Thumbnail for admin UI: prefer ~small (414x640, ~21KB).
+ *
+ * Falls back gracefully to whatever sizes the asset happens to have.
  */
-function pickImageUrl(links) {
+function sizeOfLink(href) {
+  if (typeof href !== 'string') return null;
+  const m = href.match(/~(thumb|small|medium|large|orig)\.[a-z0-9]+($|\?)/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+function pickByPreference(links, preferences) {
   if (!Array.isArray(links)) return null;
-  const byRel = {};
+  const bySize = {};
   for (const l of links) {
     if (!l || !l.href || l.render !== 'image') continue;
-    byRel[l.rel || 'unknown'] = l.href;
-    // Try to detect ~orig in href as the canonical full-size
-    if (/~orig\.[a-z0-9]+($|\?)/i.test(l.href)) {
-      byRel.canonical = l.href;
-    }
+    const size = sizeOfLink(l.href);
+    if (size) bySize[size] = l.href;
   }
-  return byRel.canonical
-      || byRel.alternate   // typically a "large" alternate
-      || byRel.preview     // smaller thumbnail
-      || byRel.unknown
-      || null;
+  for (const want of preferences) {
+    if (bySize[want]) return bySize[want];
+  }
+  // Last-resort: any image link we found
+  return Object.values(bySize)[0] || null;
+}
+
+function pickImageUrl(links) {
+  // For promotion: target ~1200-1600px wide. "large" is the sweet spot —
+  // smaller than orig but already web-sized, so we can use it as-is.
+  return pickByPreference(links, ['large', 'medium', 'orig', 'small', 'thumb']);
+}
+
+function pickThumbUrl(links) {
+  // For admin Pending tab: small is plenty.
+  return pickByPreference(links, ['small', 'thumb', 'medium', 'large']);
 }
 
 /**
@@ -165,6 +187,7 @@ function normalizeItem(item) {
   const d = (item.data && item.data[0]) || {};
   const description = d.description || d.description_508 || '';
   const imageUrl = pickImageUrl(item.links);
+  const thumbUrl = pickThumbUrl(item.links);
 
   return {
     source: NAME,
@@ -173,6 +196,7 @@ function normalizeItem(item) {
         ? `https://images.nasa.gov/details/${encodeURIComponent(d.nasa_id)}`
         : '',
     image_url: imageUrl || '',
+    thumb_url: thumbUrl || imageUrl || '',
     title: (d.title || '').trim(),
     description: description.trim(),
     photographer: extractPhotographer(d),

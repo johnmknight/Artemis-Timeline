@@ -133,21 +133,67 @@ function dateBasedEra(takenAt) {
 }
 
 /**
- * Run all keyword patterns against a single text blob. Returns a map of
- * era → match count, plus the best era and its count.
+ * Run all keyword patterns against a set of named source fields. Each
+ * field is scanned independently so we can tell the reviewer which field
+ * a match came from (title vs description vs tags).
+ *
+ * Returns:
+ *   - matches[]: every pattern hit, with the matched text and where it
+ *                lives. One match record per regex hit (so the same
+ *                pattern matching twice in one field produces two records).
+ *   - hits: { era → count } total across all fields.
+ *   - keywordEra: era with the most hits (KEYWORDS declaration order
+ *                  for ties).
+ *   - matchCount: hits[keywordEra].
+ *
+ * A `match` record looks like:
+ *   { kind: "keyword",
+ *     pattern: "\\bgeology training\\b",  // regex source for display
+ *     excerpt: "geology training",          // actual matched substring
+ *     era: "pre-flight-training",
+ *     sourceField: "title" | "description" | "tags",
+ *     index: 14                              // start index in the field text
+ *   }
+ *
+ * This shape was chosen for forward-compatibility with an LLM classifier
+ * that would return `{ kind: "rationale", text, era }` records instead.
+ * Renderers should switch on `kind`.
  */
-function scanKeywords(text) {
+function scanKeywords(fields) {
   const hits = {};
   for (const era of Object.keys(KEYWORDS)) hits[era] = 0;
-  if (!text) return { keywordEra: null, matchCount: 0, hits };
+  const matches = [];
 
-  for (const [era, patterns] of Object.entries(KEYWORDS)) {
-    for (const re of patterns) {
-      if (re.test(text)) hits[era]++;
+  if (!fields || typeof fields !== 'object') {
+    return { keywordEra: null, matchCount: 0, hits, matches };
+  }
+
+  for (const [sourceField, fieldText] of Object.entries(fields)) {
+    if (!fieldText) continue;
+    for (const [era, patterns] of Object.entries(KEYWORDS)) {
+      for (const re of patterns) {
+        // Use a fresh global-flag regex so .exec() can iterate multiple hits
+        // without mutating the original pattern's lastIndex.
+        const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
+        let m;
+        while ((m = g.exec(fieldText)) !== null) {
+          hits[era]++;
+          matches.push({
+            kind: 'keyword',
+            pattern: re.source,
+            excerpt: m[0],
+            era,
+            sourceField,
+            index: m.index,
+          });
+          // Prevent zero-length-match infinite loop (paranoia).
+          if (m.index === g.lastIndex) g.lastIndex++;
+        }
+      }
     }
   }
 
-  // Find the era with the most hits; ties broken by KEYWORDS declaration order.
+  // Tie-breaking: KEYWORDS declaration order.
   let bestEra = null;
   let bestCount = 0;
   for (const era of Object.keys(KEYWORDS)) {
@@ -156,7 +202,7 @@ function scanKeywords(text) {
       bestCount = hits[era];
     }
   }
-  return { keywordEra: bestEra, matchCount: bestCount, hits };
+  return { keywordEra: bestEra, matchCount: bestCount, hits, matches };
 }
 
 /**
@@ -169,15 +215,16 @@ function extractSubjectTags(hits) {
 }
 
 /**
- * Build the candidate text blob the classifier scans. Title, description,
- * and tags are all concatenated into a single space-separated string.
+ * Build the named field map the classifier scans. Keeping fields separate
+ * (vs. one concatenated blob) lets the highlighter tell the reviewer
+ * which field a match came from.
  */
-function candidateText(candidate) {
-  return [
-    candidate.title || '',
-    candidate.description || '',
-    Array.isArray(candidate.tags) ? candidate.tags.join(' ') : '',
-  ].join(' ');
+function candidateFields(candidate) {
+  return {
+    title: candidate.title || '',
+    description: candidate.description || '',
+    tags: Array.isArray(candidate.tags) ? candidate.tags.join(' • ') : '',
+  };
 }
 
 /**
@@ -190,8 +237,8 @@ function candidateText(candidate) {
 function classify(candidate) {
   const sourceDefault = candidate.source_default_era || ERA_UNKNOWN;
   const dateBased = dateBasedEra(candidate.taken_at);
-  const text = candidateText(candidate);
-  const { keywordEra, matchCount, hits } = scanKeywords(text);
+  const fields = candidateFields(candidate);
+  const { keywordEra, matchCount, hits, matches } = scanKeywords(fields);
 
   let era, confidence, reason;
 
@@ -245,11 +292,39 @@ function classify(candidate) {
     reason = 'no signals';
   }
 
+  // Evidence: enumerate the matches that drove the verdict, plus any
+  // structural signals (date window, source default) that contributed.
+  // The shape is extensible — quality-score and center-source evidence
+  // is attached later by sync.js, and a future LLM classifier can return
+  // { kind: "rationale", text, era } records here instead.
+  const evidence = {
+    era_matches: matches.slice(),
+  };
+  if (dateBased) {
+    evidence.era_matches.push({
+      kind: 'date_window',
+      pattern: `taken_at in ${MISSION_START_DATE}..${MISSION_END_DATE}`,
+      excerpt: candidate.taken_at || '',
+      era: dateBased,
+      sourceField: 'taken_at',
+    });
+  }
+  if (sourceDefault !== ERA_UNKNOWN) {
+    evidence.era_matches.push({
+      kind: 'source_default',
+      pattern: `${candidate.source} → ${sourceDefault}`,
+      excerpt: candidate.source || '',
+      era: sourceDefault,
+      sourceField: 'source',
+    });
+  }
+
   return {
     era,
     confidence,
     subject_tags: extractSubjectTags(hits),
     reason,
+    evidence,
   };
 }
 

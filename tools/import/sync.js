@@ -95,38 +95,82 @@ async function loadInbox() {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns "green" | "yellow" | "red" for the Pending tab's quality badge.
+ * Score a candidate against EDITORIAL.md's must-haves. Returns:
  *
- *   green  = all must-haves present
- *   yellow = 1-2 weak fields
- *   red    = major fields missing
+ *   { score: "green" | "yellow" | "red",
+ *     failures: [{ field, reason }, ...] }
+ *
+ * Each failure record contains enough info for the admin Pending tab to
+ * say "this card is yellow because: title is just the source ID,
+ * photographer is generic NASA."
  */
 function scoreQuality(candidate) {
   let weak = 0;
+  const failures = [];
 
-  // Meaningful title (>= 5 chars, not just the source ID)
   const title = (candidate.title || '').trim();
-  if (!title || title.length < 5) weak++;
-  else if (candidate.source_id && title.includes(candidate.source_id)) {
-    // Title is just the filename / ID — that's a half-credit weakness.
-    // (Many NASA Library titles are e.g. "... -- jsc2024e055108".)
+  if (!title || title.length < 5) {
+    weak++;
+    failures.push({ field: 'title', reason: 'missing or very short title' });
+  } else if (candidate.source_id && title.includes(candidate.source_id)) {
+    // Many NASA Library titles end with the source ID, e.g. "... -- jsc2024e055108".
+    // Recognizable but not exactly editorial gold.
     weak += 0.5;
+    failures.push({ field: 'title', reason: 'title contains the source ID — consider rewriting' });
   }
 
-  // Defensible timestamp
-  if (!candidate.taken_at) weak++;
+  if (!candidate.taken_at) {
+    weak++;
+    failures.push({ field: 'taken_at', reason: 'no defensible timestamp' });
+  }
 
-  // Specific photographer (NASA fallback counts as weak)
-  if (!candidate.photographer || candidate.photographer === 'NASA') weak++;
+  if (!candidate.photographer || candidate.photographer === 'NASA') {
+    weak++;
+    failures.push({ field: 'photographer', reason: 'photographer is generic "NASA" — specific credit preferred' });
+  }
 
-  // Description longer than the title (substantive context)
   const desc = (candidate.description || '').trim();
-  if (!desc) weak++;
-  else if (desc.length < title.length + 20) weak += 0.5;
+  if (!desc) {
+    weak++;
+    failures.push({ field: 'description', reason: 'description is empty' });
+  } else if (desc.length < title.length + 20) {
+    weak += 0.5;
+    failures.push({ field: 'description', reason: 'description barely longer than title — likely lacking context' });
+  }
 
-  if (weak <= 0.5) return 'green';
-  if (weak <= 2)   return 'yellow';
-  return 'red';
+  let score;
+  if (weak <= 0.5)      score = 'green';
+  else if (weak <= 2)   score = 'yellow';
+  else                  score = 'red';
+
+  return { score, failures };
+}
+
+/**
+ * Best-guess explanation of where the `center` value on a candidate
+ * came from. NASA Library adapters populate this from the API's `center`
+ * code; other sources may derive it differently. Reviewer-friendly text.
+ */
+function explainCenterSource(candidate) {
+  if (!candidate.center) {
+    return {
+      kind: 'absent',
+      note: 'no NASA center associated (likely in-flight, recovery, or non-NASA setting)',
+    };
+  }
+  if (candidate.source === 'nasa_library') {
+    return {
+      kind: 'adapter',
+      field: 'data[0].center',
+      value: candidate.center,
+      note: 'from NASA Image Library API\'s center code',
+    };
+  }
+  return {
+    kind: 'adapter',
+    value: candidate.center,
+    note: `from ${candidate.source} adapter`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -200,11 +244,24 @@ async function main() {
   const processed = rawCandidates.map(raw => {
     const normalized = normalizeCandidate(raw);
     const classified = classify(normalized);
+    const { score: quality, failures: qualityFailures } = scoreQuality(normalized);
+    const centerSource = explainCenterSource(normalized);
+
+    // Assemble the unified evidence object. Classifier already populated
+    // evidence.era_matches; we tack on quality and center evidence here so
+    // every reviewer-facing decision is traceable from one place.
+    const evidence = {
+      ...(classified.evidence || {}),
+      quality_failures: qualityFailures,
+      center_source: centerSource,
+    };
+
     return {
       ...normalized,
       classified,
+      evidence,
       addedAt: runAddedAt,
-      quality: scoreQuality(normalized),
+      quality,
     };
   });
 

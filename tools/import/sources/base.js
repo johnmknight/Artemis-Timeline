@@ -21,6 +21,11 @@
  * @property {string}   source_id        - stable ID at the source
  * @property {string}   source_url       - human-friendly URL at the source
  * @property {string}   image_url        - direct URL to the full-resolution image
+ *                                          (used at promote time as the source
+ *                                          for the local web/ copy)
+ * @property {string}   thumb_url        - direct URL to a small thumbnail
+ *                                          (used by the admin Pending tab to
+ *                                          render review thumbnails)
  * @property {string}   title            - human-readable title
  * @property {string}   description      - longer-form description
  * @property {string}   photographer     - photographer credit; "NASA" or "" if unknown
